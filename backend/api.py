@@ -1,6 +1,5 @@
 import os
 import time
-import random
 from datetime import datetime, date
 from typing import Optional
 
@@ -10,28 +9,28 @@ from sqlalchemy import func
 from pydantic import BaseModel
 import httpx
 
-# ✅ FIXED IMPORTS
 from backend.database import (
-    get_db, User, ApiKey, Model, ProviderKey, UsageLog, Payment,
+    get_db, User, ApiKey, Model, ProviderKey, UsageLog,
     generate_api_key, hash_api_key
 )
 from backend.auth import get_current_user, get_admin_user
 
 router = APIRouter()
 
+# ─────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────
+
 UPI_ID = os.getenv("UPI_ID", "modelshield@upi")
 UPI_NAME = os.getenv("UPI_NAME", "ModelShield")
 
-CREDIT_PACKAGES = [
-    {"id": 1, "credits": 500, "amount": 99, "label": "Starter"},
-    {"id": 2, "credits": 1500, "amount": 249, "label": "Pro"},
-    {"id": 3, "credits": 5000, "amount": 699, "label": "Business"},
-    {"id": 4, "credits": 15000, "amount": 1799, "label": "Enterprise"},
-]
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # ✅ FIX
 
-# In-memory rate limit
+# ─────────────────────────────────────────────
+# RATE LIMIT
+# ─────────────────────────────────────────────
+
 _rate_limit_store = {}
-
 
 def check_rate_limit(api_key_id: int, rate_limit: int) -> bool:
     now = time.time()
@@ -59,7 +58,9 @@ def get_daily_usage(db: Session, api_key_id: int) -> int:
     return result or 0
 
 
-# ─── MODELS ─────────────────────────────────
+# ─────────────────────────────────────────────
+# MODELS
+# ─────────────────────────────────────────────
 
 @router.get("/models")
 def list_models(db: Session = Depends(get_db)):
@@ -77,16 +78,20 @@ def list_models(db: Session = Depends(get_db)):
     ]
 
 
-# ─── API KEYS ───────────────────────────────
+# ─────────────────────────────────────────────
+# API KEYS
+# ─────────────────────────────────────────────
 
 class CreateKeyRequest(BaseModel):
     name: str = "My API Key"
 
 
 @router.post("/keys/create")
-def create_api_key(req: CreateKeyRequest,
-                   current_user: User = Depends(get_current_user),
-                   db: Session = Depends(get_db)):
+def create_api_key(
+    req: CreateKeyRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
 
     count = db.query(ApiKey).filter(
         ApiKey.user_id == current_user.id,
@@ -111,12 +116,14 @@ def create_api_key(req: CreateKeyRequest,
     return {"api_key": raw_key}
 
 
-# ─── CHAT COMPLETION ───────────────────────
+# ─────────────────────────────────────────────
+# CHAT COMPLETION
+# ─────────────────────────────────────────────
 
 @router.post("/v1/chat/completions")
 async def chat(req: Request, db: Session = Depends(get_db)):
 
-    # 🔐 API KEY AUTH
+    # 🔐 USER API KEY AUTH
     auth_header = req.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         raise HTTPException(401, "Missing API key")
@@ -150,18 +157,22 @@ async def chat(req: Request, db: Session = Depends(get_db)):
     if not model:
         raise HTTPException(404, "Model not found")
 
-    # 🔑 PROVIDER KEY
+    # 🔑 PROVIDER KEY RESOLUTION (FIXED)
     provider_key = db.query(ProviderKey).filter(
         ProviderKey.provider == model.provider,
         ProviderKey.is_active == True
     ).first()
 
-    api_key_provider = provider_key.api_key if provider_key else os.getenv("OPENAI_API_KEY")
+    if provider_key:
+        api_key_provider = provider_key.api_key
+    else:
+        # fallback (for Groq)
+        api_key_provider = GROQ_API_KEY
 
     if not api_key_provider:
-        raise HTTPException(500, "Provider not configured")
+        raise HTTPException(500, f"{model.provider} provider not configured")
 
-    # 📡 CALL PROVIDER
+    # 📡 PROVIDER CALL
     payload = {
         "model": model.name,
         "messages": body.get("messages", []),
@@ -173,12 +184,15 @@ async def chat(req: Request, db: Session = Depends(get_db)):
     }
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             res = await client.post(model.endpoint, json=payload, headers=headers)
+
+        if res.status_code != 200:
+            raise HTTPException(res.status_code, res.text)
 
         data = res.json()
 
-        # 💰 COST CALC
+        # 💰 COST CALCULATION
         tokens = data.get("usage", {}).get("total_tokens", 0)
         cost = tokens * model.cost_per_token
 
@@ -197,10 +211,12 @@ async def chat(req: Request, db: Session = Depends(get_db)):
         return data
 
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, f"Provider error: {str(e)}")
 
 
-# ─── ADMIN ────────────────────────────────
+# ─────────────────────────────────────────────
+# ADMIN
+# ─────────────────────────────────────────────
 
 @router.get("/admin/users")
 def users(admin: User = Depends(get_admin_user), db: Session = Depends(get_db)):
