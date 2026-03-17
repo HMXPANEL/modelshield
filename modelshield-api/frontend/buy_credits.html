@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Buy Credits — ModelShield</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="sidebar-overlay" id="sidebar-overlay"></div>
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-logo"><strong>ModelShield</strong><span style="font-size:0.7rem;color:var(--text3);font-weight:500;">AI API Gateway</span></div>
+  <span class="sidebar-section">Main</span>
+  <a href="dashboard.html" class="sidebar-link"><span class="icon">📊</span><strong>Dashboard</strong></a>
+  <a href="api_keys.html" class="sidebar-link"><span class="icon">🔑</span><strong>API Keys</strong></a>
+  <a href="models.html" class="sidebar-link"><span class="icon">🤖</span><strong>Models</strong></a>
+  <a href="playground.html" class="sidebar-link"><span class="icon">🎮</span><strong>Playground</strong></a>
+  <span class="sidebar-section">Billing</span>
+  <a href="usage.html" class="sidebar-link"><span class="icon">📈</span><strong>Usage</strong></a>
+  <a href="buy_credits.html" class="sidebar-link active"><span class="icon">💳</span><strong>Buy Credits</strong></a>
+  <span class="sidebar-section">Help</span>
+  <a href="docs.html" class="sidebar-link"><span class="icon">📖</span><strong>Docs</strong></a>
+  <div style="margin-top:auto;padding-top:2rem;"><button class="btn btn-ghost btn-sm" style="width:100%" onclick="logout()"><strong>🚪 Logout</strong></button></div>
+</aside>
+<div class="main-content">
+  <div style="display:flex;align-items:center;gap:1rem;margin-bottom:2rem;">
+    <button class="hamburger" id="hamburger">☰</button>
+    <div><h1><strong>💳 Buy Credits</strong></h1><p><strong>Top up your credits via UPI payment</strong></p></div>
+  </div>
+  <div id="alert-container"></div>
+
+  <!-- Step 1: Choose Package -->
+  <div id="step-1">
+    <h3 style="margin-bottom:1.25rem;"><strong>1. Choose a Credit Package</strong></h3>
+    <div class="grid grid-4" id="packages-grid"></div>
+  </div>
+
+  <!-- Step 2: UPI Payment -->
+  <div id="step-2" style="display:none;max-width:500px;">
+    <h3 style="margin-bottom:1.25rem;"><strong>2. Complete UPI Payment</strong></h3>
+    <div class="card">
+      <div style="text-align:center;padding:1rem 0;">
+        <div style="font-size:2.5rem;margin-bottom:0.5rem;">📱</div>
+        <h3><strong>Pay via UPI</strong></h3>
+        <div style="margin:1rem 0;">
+          <div style="font-size:0.8rem;color:var(--text2);"><strong>Pay exactly this amount:</strong></div>
+          <div style="font-size:2rem;font-weight:700;color:var(--success);" id="pay-amount">₹0.00</div>
+          <div style="font-size:0.75rem;color:var(--text3);">(Unique amount helps us identify your payment)</div>
+        </div>
+        <div style="background:var(--bg3);border-radius:var(--radius-sm);padding:0.75rem;margin-bottom:1rem;text-align:left;">
+          <div style="font-size:0.75rem;color:var(--text2);margin-bottom:0.25rem;"><strong>UPI ID:</strong></div>
+          <div style="font-family:var(--mono);font-size:0.9rem;color:var(--accent);" id="upi-id-display">modelshield@upi</div>
+        </div>
+        <button class="btn btn-success btn-lg" style="width:100%;margin-bottom:0.75rem;" id="upi-btn" onclick="openUPI()"><strong>📱 Pay with UPI App</strong></button>
+        <p style="font-size:0.75rem;color:var(--text2);">Opens your UPI app (PhonePe, GPay, Paytm, etc.)</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 3: Submit UTR -->
+  <div id="step-3" style="display:none;max-width:500px;margin-top:1.5rem;">
+    <h3 style="margin-bottom:1.25rem;"><strong>3. Submit UTR / Transaction ID</strong></h3>
+    <div class="card">
+      <p style="margin-bottom:1rem;font-size:0.875rem;"><strong>After payment, enter your 12-digit UTR number (find it in your UPI app transaction history).</strong></p>
+      <div class="form-group">
+        <label><strong>UTR / Transaction Reference Number</strong></label>
+        <input type="text" id="utr-input" class="form-control" placeholder="e.g. 123456789012" maxlength="20">
+      </div>
+      <button class="btn btn-primary" style="width:100%" id="utr-btn" onclick="submitUTR()"><strong>Submit for Verification</strong></button>
+    </div>
+  </div>
+
+  <!-- Payment History -->
+  <div style="margin-top:2.5rem;">
+    <h3 style="margin-bottom:1rem;"><strong>📋 Payment History</strong></h3>
+    <div id="payment-history"></div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+<script>
+if (!requireAuth()) {}
+let currentPaymentId = null;
+let currentUpiLink = null;
+
+const packages = [
+  { id: 1, credits: 500, amount: 99, label: "Starter", desc: "Perfect for testing", popular: false },
+  { id: 2, credits: 1500, amount: 249, label: "Pro", desc: "Most popular choice", popular: true },
+  { id: 3, credits: 5000, amount: 699, label: "Business", desc: "For small teams", popular: false },
+  { id: 4, credits: 15000, amount: 1799, label: "Enterprise", desc: "High volume usage", popular: false },
+];
+
+function renderPackages() {
+  document.getElementById("packages-grid").innerHTML = packages.map(p => `
+    <div class="card card-hover" style="position:relative;cursor:pointer;${p.popular?'border-color:var(--primary);':''}" onclick="selectPackage(${p.id})">
+      ${p.popular ? `<div style="position:absolute;top:-10px;right:1rem;background:var(--primary);color:#fff;font-size:0.65rem;font-weight:700;padding:0.2rem 0.6rem;border-radius:999px;text-transform:uppercase;">⭐ Popular</div>` : ''}
+      <div style="font-size:1.5rem;margin-bottom:0.5rem;">💰</div>
+      <h3><strong>${p.label}</strong></h3>
+      <p style="font-size:0.8rem;margin:0.25rem 0 0.75rem;">${p.desc}</p>
+      <div style="font-size:1.75rem;font-weight:700;color:var(--text);">₹${p.amount}</div>
+      <div style="color:var(--success);font-weight:700;font-size:0.9rem;margin-top:0.25rem;">${formatNumber(p.credits)} credits</div>
+      <div style="font-size:0.7rem;color:var(--text3);margin-top:0.25rem;">₹${(p.amount/p.credits*100).toFixed(3)} per 100 credits</div>
+      <button class="btn btn-primary" style="width:100%;margin-top:1rem;"><strong>Select</strong></button>
+    </div>
+  `).join("");
+}
+
+async function selectPackage(id) {
+  setLoading(null, true);
+  try {
+    const data = await apiFetch("/payments/create", { method: "POST", body: JSON.stringify({ package_id: id }) });
+    if (!data) return;
+    currentPaymentId = data.payment_id;
+    currentUpiLink = data.upi_link;
+    document.getElementById("pay-amount").textContent = `₹${data.amount}`;
+    document.getElementById("upi-id-display").textContent = data.upi_id;
+    document.getElementById("step-1").style.display = "none";
+    document.getElementById("step-2").style.display = "block";
+    document.getElementById("step-3").style.display = "block";
+  } catch (e) { showAlert(e.message, "error"); }
+}
+
+function openUPI() {
+  if (currentUpiLink) window.location.href = currentUpiLink;
+}
+
+async function submitUTR() {
+  const utr = document.getElementById("utr-input").value.trim();
+  if (!utr || utr.length < 6) { showAlert("Please enter a valid UTR number", "error"); return; }
+  if (!currentPaymentId) { showAlert("No active payment. Please select a package first.", "error"); return; }
+  setLoading("utr-btn", true);
+  try {
+    const data = await apiFetch("/payments/submit-utr", { method: "POST", body: JSON.stringify({ payment_id: currentPaymentId, utr }) });
+    if (data) {
+      showAlert("✅ UTR submitted! Credits will be added after admin verification (usually within 1 hour).", "success");
+      document.getElementById("step-2").style.display = "none";
+      document.getElementById("step-3").style.display = "none";
+      document.getElementById("step-1").style.display = "block";
+      loadPaymentHistory();
+    }
+  } catch (e) { showAlert(e.message, "error"); }
+  setLoading("utr-btn", false);
+}
+
+async function loadPaymentHistory() {
+  try {
+    const payments = await apiFetch("/payments/status");
+    if (!payments) return;
+    const el = document.getElementById("payment-history");
+    if (!payments.length) {
+      el.innerHTML = `<div class="card"><div class="empty-state"><div class="icon">💳</div><p><strong>No payments yet</strong></p></div></div>`;
+      return;
+    }
+    el.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th><strong>ID</strong></th><th><strong>Amount</strong></th><th><strong>Credits</strong></th><th><strong>UTR</strong></th><th><strong>Status</strong></th><th><strong>Date</strong></th></tr></thead>
+      <tbody>${payments.map(p => `<tr>
+        <td><strong>#${p.id}</strong></td>
+        <td><strong>₹${p.amount}</strong></td>
+        <td><strong style="color:var(--success);">${formatNumber(p.credits)}</strong></td>
+        <td style="font-family:var(--mono);font-size:0.8rem;">${p.utr || '—'}</td>
+        <td><span class="badge badge-${p.status==='verified'?'success':p.status==='rejected'?'danger':'warning'}">${p.status.replace(/_/g,' ')}</span></td>
+        <td style="font-size:0.8rem;color:var(--text2);">${formatDate(p.created_at)}</td>
+      </tr>`).join("")}</tbody>
+    </table></div>`;
+  } catch(e) {}
+}
+
+renderPackages();
+loadPaymentHistory();
+</script>
+</body>
+</html>

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard — ModelShield</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="sidebar-overlay" id="sidebar-overlay"></div>
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-logo"><strong>ModelShield</strong><span style="font-size:0.7rem;color:var(--text3);font-weight:500;">AI API Gateway</span></div>
+  <span class="sidebar-section">Main</span>
+  <a href="dashboard.html" class="sidebar-link active"><span class="icon">📊</span><strong>Dashboard</strong></a>
+  <a href="api_keys.html" class="sidebar-link"><span class="icon">🔑</span><strong>API Keys</strong></a>
+  <a href="models.html" class="sidebar-link"><span class="icon">🤖</span><strong>Models</strong></a>
+  <a href="playground.html" class="sidebar-link"><span class="icon">🎮</span><strong>Playground</strong></a>
+  <span class="sidebar-section">Billing</span>
+  <a href="usage.html" class="sidebar-link"><span class="icon">📈</span><strong>Usage</strong></a>
+  <a href="buy_credits.html" class="sidebar-link"><span class="icon">💳</span><strong>Buy Credits</strong></a>
+  <span class="sidebar-section">Help</span>
+  <a href="docs.html" class="sidebar-link"><span class="icon">📖</span><strong>Docs</strong></a>
+  <div style="margin-top:auto;padding-top:2rem;">
+    <button class="btn btn-ghost btn-sm" style="width:100%" onclick="logout()"><strong>🚪 Logout</strong></button>
+  </div>
+</aside>
+<div class="main-content">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2rem;flex-wrap:wrap;gap:1rem;">
+    <button class="hamburger" id="hamburger">☰</button>
+    <div>
+      <h1><strong>Dashboard</strong></h1>
+      <p>Welcome back, <strong id="user-email">—</strong></p>
+    </div>
+    <div class="credits-pill" id="credits-display">⚡ — credits</div>
+  </div>
+  <div class="grid grid-4" id="stats-grid">
+    <div class="stat-card"><div class="stat-label"><strong>Credits</strong></div><div class="stat-value" id="stat-credits">—</div><div class="stat-sub">Available balance</div></div>
+    <div class="stat-card"><div class="stat-label"><strong>Total Requests</strong></div><div class="stat-value" id="stat-requests">—</div><div class="stat-sub">All time</div></div>
+    <div class="stat-card"><div class="stat-label"><strong>Tokens Used</strong></div><div class="stat-value" id="stat-tokens">—</div><div class="stat-sub">All time</div></div>
+    <div class="stat-card"><div class="stat-label"><strong>API Keys</strong></div><div class="stat-value" id="stat-keys">—</div><div class="stat-sub">Active keys</div></div>
+  </div>
+  <div class="grid grid-2" style="margin-top:2rem;">
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;">
+        <h3><strong>🔑 API Keys</strong></h3>
+        <a href="api_keys.html" class="btn btn-primary btn-sm"><strong>Manage</strong></a>
+      </div>
+      <div id="keys-preview"></div>
+    </div>
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem;">
+        <h3><strong>📊 Recent Usage</strong></h3>
+        <a href="usage.html" class="btn btn-ghost btn-sm"><strong>View All</strong></a>
+      </div>
+      <div id="usage-preview"></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:2rem;">
+    <h3 style="margin-bottom:1rem;"><strong>⚡ Quick Start</strong></h3>
+    <div class="grid grid-3">
+      <a href="api_keys.html" class="card card-hover" style="text-decoration:none;padding:1rem;">
+        <div style="font-size:1.5rem;margin-bottom:0.5rem;">🔑</div>
+        <strong style="display:block;margin-bottom:0.25rem;">Create API Key</strong>
+        <p style="font-size:0.8rem;">Generate your first key</p>
+      </a>
+      <a href="playground.html" class="card card-hover" style="text-decoration:none;padding:1rem;">
+        <div style="font-size:1.5rem;margin-bottom:0.5rem;">🎮</div>
+        <strong style="display:block;margin-bottom:0.25rem;">Try Playground</strong>
+        <p style="font-size:0.8rem;">Test models in browser</p>
+      </a>
+      <a href="docs.html" class="card card-hover" style="text-decoration:none;padding:1rem;">
+        <div style="font-size:1.5rem;margin-bottom:0.5rem;">📖</div>
+        <strong style="display:block;margin-bottom:0.25rem;">Read Docs</strong>
+        <p style="font-size:0.8rem;">API integration guide</p>
+      </a>
+    </div>
+  </div>
+</div>
+<script src="app.js"></script>
+<script>
+if (!requireAuth()) {}
+const user = getUser();
+
+async function loadDashboard() {
+  if (user) {
+    document.getElementById("user-email").textContent = user.email;
+    document.getElementById("credits-display").textContent = `⚡ ${parseFloat(user.credits || 0).toFixed(1)} credits`;
+    document.getElementById("stat-credits").textContent = parseFloat(user.credits || 0).toFixed(1);
+  }
+  try {
+    const [usage, keys] = await Promise.all([apiFetch("/usage"), apiFetch("/keys")]);
+    if (usage) {
+      document.getElementById("stat-requests").textContent = formatNumber(usage.logs.length);
+      document.getElementById("stat-tokens").textContent = formatNumber(usage.total_tokens);
+      const recent = usage.logs.slice(0, 5);
+      document.getElementById("usage-preview").innerHTML = recent.length
+        ? recent.map(l => `<div style="display:flex;justify-content:space-between;align-items:center;padding:0.5rem 0;border-bottom:1px solid var(--border);">
+            <div><strong style="font-size:0.8rem;">${l.model}</strong><div style="font-size:0.7rem;color:var(--text3);">${formatDate(l.timestamp)}</div></div>
+            <div style="text-align:right;"><span class="badge badge-${l.status==='success'?'success':'danger'}" style="font-size:0.65rem;">${l.status}</span><div style="font-size:0.75rem;color:var(--text2);margin-top:0.15rem;">${formatNumber(l.tokens)} tokens</div></div>
+          </div>`).join("")
+        : `<div class="empty-state"><div class="icon">📊</div><p><strong>No requests yet</strong></p></div>`;
+    }
+    if (keys) {
+      document.getElementById("stat-keys").textContent = keys.filter(k => k.status === "active").length;
+      document.getElementById("keys-preview").innerHTML = keys.length
+        ? keys.slice(0, 3).map(k => `<div style="display:flex;justify-content:space-between;align-items:center;padding:0.5rem 0;border-bottom:1px solid var(--border);">
+            <div><strong style="font-size:0.875rem;">${k.name}</strong><div style="font-family:var(--mono);font-size:0.75rem;color:var(--text3);">${k.key_prefix}</div></div>
+            <span class="badge badge-${k.status==='active'?'success':'danger'}">${k.status}</span>
+          </div>`).join("")
+        : `<div class="empty-state"><div class="icon">🔑</div><p><strong>No API keys yet</strong></p><a href="api_keys.html" class="btn btn-primary btn-sm" style="margin-top:0.75rem;"><strong>Create Key</strong></a></div>`;
+    }
+  } catch (e) { console.error(e); }
+}
+loadDashboard();
+</script>
+</body>
+</html>

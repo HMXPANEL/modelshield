@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login — ModelShield</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-card fade-in">
+    <div class="auth-logo">
+      <h1><span class="gradient-text">ModelShield</span></h1>
+      <p style="color:var(--text2);font-size:0.9rem;margin-top:0.25rem;"><strong>AI API Gateway</strong></p>
+    </div>
+    <div id="alert-container"></div>
+    <div class="form-group">
+      <label><strong>Email Address</strong></label>
+      <input type="email" id="email" class="form-control" placeholder="you@example.com" autocomplete="email">
+    </div>
+    <div class="form-group">
+      <label><strong>Password</strong></label>
+      <input type="password" id="password" class="form-control" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <button class="btn btn-primary" style="width:100%" id="login-btn" onclick="doLogin()"><strong>Sign In</strong></button>
+    <div class="auth-footer">
+      <strong>No account?</strong> <a href="signup.html"><strong>Create one free →</strong></a>
+    </div>
+  </div>
+</div>
+<script src="app.js"></script>
+<script>
+if (isLoggedIn()) window.location.href = "dashboard.html";
+document.getElementById("password").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
+
+async function doLogin() {
+  const email = document.getElementById("email").value.trim();
+  const password = document.getElementById("password").value;
+  if (!email || !password) { showAlert("Please fill in all fields", "error"); return; }
+  setLoading("login-btn", true);
+  try {
+    const data = await apiFetch("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+    if (data) {
+      setAuth(data.access_token, data.user);
+      window.location.href = "dashboard.html";
+    }
+  } catch (e) {
+    showAlert(e.message, "error");
+    setLoading("login-btn", false);
+  }
+}
+</script>
+</body>
+</html>

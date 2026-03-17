@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Login — ModelShield</title>
+<link rel="stylesheet" href="admin.css">
+<style>
+.auth-wrap { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:2rem 1rem; background:var(--bg); background-image:radial-gradient(ellipse at 20% 20%,rgba(79,70,229,0.08) 0%,transparent 50%); }
+.auth-card { background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:2.5rem; width:100%; max-width:400px; }
+.auth-logo { text-align:center; margin-bottom:2rem; }
+.gradient-text { background:linear-gradient(135deg,#4F46E5,#06B6D4); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+</style>
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-card fade-in">
+    <div class="auth-logo">
+      <h2><span class="gradient-text">ModelShield</span></h2>
+      <p style="color:var(--text2);font-size:0.85rem;margin-top:0.25rem;"><strong>🔒 Admin Dashboard</strong></p>
+    </div>
+    <div id="alert-container"></div>
+    <div class="form-group">
+      <label><strong>Admin Email</strong></label>
+      <input type="email" id="email" class="form-control" placeholder="admin@modelshield.dev" value="admin@modelshield.dev">
+    </div>
+    <div class="form-group">
+      <label><strong>Password</strong></label>
+      <input type="password" id="password" class="form-control" placeholder="••••••••" value="admin123">
+    </div>
+    <button class="btn btn-primary" style="width:100%" id="login-btn" onclick="doLogin()"><strong>Sign in to Admin</strong></button>
+    <p style="text-align:center;font-size:0.75rem;color:var(--text3);margin-top:1rem;"><strong>Default: admin@modelshield.dev / admin123</strong></p>
+  </div>
+</div>
+<script src="admin.js"></script>
+<script>
+const user = getUser();
+if (user && user.is_admin) window.location.href = "analytics.html";
+
+document.getElementById("password").addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
+
+async function doLogin() {
+  const email = document.getElementById("email").value.trim();
+  const password = document.getElementById("password").value;
+  if (!email || !password) { showAlert("Fill in all fields", "error"); return; }
+  setLoading("login-btn", true);
+  try {
+    const data = await apiFetch("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+    if (data) {
+      if (!data.user.is_admin) { showAlert("Not an admin account", "error"); setLoading("login-btn", false); return; }
+      setAuth(data.access_token, data.user);
+      window.location.href = "analytics.html";
+    }
+  } catch (e) { showAlert(e.message, "error"); setLoading("login-btn", false); }
+}
+</script>
+</body>
+</html>

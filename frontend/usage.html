@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Usage — ModelShield</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="sidebar-overlay" id="sidebar-overlay"></div>
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-logo"><strong>ModelShield</strong><span style="font-size:0.7rem;color:var(--text3);font-weight:500;">AI API Gateway</span></div>
+  <span class="sidebar-section">Main</span>
+  <a href="dashboard.html" class="sidebar-link"><span class="icon">📊</span><strong>Dashboard</strong></a>
+  <a href="api_keys.html" class="sidebar-link"><span class="icon">🔑</span><strong>API Keys</strong></a>
+  <a href="models.html" class="sidebar-link"><span class="icon">🤖</span><strong>Models</strong></a>
+  <a href="playground.html" class="sidebar-link"><span class="icon">🎮</span><strong>Playground</strong></a>
+  <span class="sidebar-section">Billing</span>
+  <a href="usage.html" class="sidebar-link active"><span class="icon">📈</span><strong>Usage</strong></a>
+  <a href="buy_credits.html" class="sidebar-link"><span class="icon">💳</span><strong>Buy Credits</strong></a>
+  <span class="sidebar-section">Help</span>
+  <a href="docs.html" class="sidebar-link"><span class="icon">📖</span><strong>Docs</strong></a>
+  <div style="margin-top:auto;padding-top:2rem;"><button class="btn btn-ghost btn-sm" style="width:100%" onclick="logout()"><strong>🚪 Logout</strong></button></div>
+</aside>
+<div class="main-content">
+  <div style="display:flex;align-items:center;gap:1rem;margin-bottom:2rem;">
+    <button class="hamburger" id="hamburger">☰</button>
+    <div><h1><strong>📈 Usage Analytics</strong></h1><p><strong>Track your API consumption and costs</strong></p></div>
+  </div>
+  <div class="grid grid-3" style="margin-bottom:2rem;">
+    <div class="stat-card"><div class="stat-label"><strong>Total Tokens</strong></div><div class="stat-value" id="total-tokens">—</div><div class="stat-sub">All time</div></div>
+    <div class="stat-card"><div class="stat-label"><strong>Total Cost</strong></div><div class="stat-value" id="total-cost">—</div><div class="stat-sub">Credits spent</div></div>
+    <div class="stat-card"><div class="stat-label"><strong>Total Requests</strong></div><div class="stat-value" id="total-requests">—</div><div class="stat-sub">API calls made</div></div>
+  </div>
+  <div class="card">
+    <h3 style="margin-bottom:1.25rem;"><strong>📋 Request History</strong></h3>
+    <div id="usage-table"></div>
+  </div>
+</div>
+<script src="app.js"></script>
+<script>
+if (!requireAuth()) {}
+
+async function loadUsage() {
+  try {
+    const data = await apiFetch("/usage");
+    if (!data) return;
+    document.getElementById("total-tokens").textContent = formatNumber(data.total_tokens);
+    document.getElementById("total-cost").textContent = data.total_cost.toFixed(4);
+    document.getElementById("total-requests").textContent = formatNumber(data.logs.length);
+    const el = document.getElementById("usage-table");
+    if (!data.logs.length) {
+      el.innerHTML = `<div class="empty-state"><div class="icon">📈</div><h3><strong>No usage yet</strong></h3><p>Make your first API request to see usage data here</p><a href="playground.html" class="btn btn-primary" style="margin-top:1rem;"><strong>Try Playground</strong></a></div>`;
+      return;
+    }
+    el.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th><strong>Time</strong></th><th><strong>Model</strong></th><th><strong>Tokens</strong></th><th><strong>Cost</strong></th><th><strong>Status</strong></th></tr></thead>
+      <tbody>${data.logs.map(l => `<tr>
+        <td style="font-size:0.8rem;color:var(--text2);">${formatDate(l.timestamp)}</td>
+        <td><strong style="font-size:0.875rem;">${l.model}</strong></td>
+        <td><strong>${formatNumber(l.tokens)}</strong></td>
+        <td style="font-family:var(--mono);font-size:0.8rem;">${l.cost.toFixed(6)}</td>
+        <td><span class="badge badge-${l.status==='success'?'success':'danger'}">${l.status}</span></td>
+      </tr>`).join("")}</tbody>
+    </table></div>`;
+  } catch (e) { document.getElementById("usage-table").innerHTML = `<p style="color:var(--danger);"><strong>${e.message}</strong></p>`; }
+}
+loadUsage();
+</script>
+</body>
+</html>

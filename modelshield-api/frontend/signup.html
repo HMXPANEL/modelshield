@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign Up — ModelShield</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-card fade-in">
+    <div class="auth-logo">
+      <h1><span class="gradient-text">ModelShield</span></h1>
+      <p style="color:var(--text2);font-size:0.9rem;margin-top:0.25rem;"><strong>Start free — 100 credits included</strong></p>
+    </div>
+    <div id="alert-container"></div>
+    <div class="form-group">
+      <label><strong>Email Address</strong></label>
+      <input type="email" id="email" class="form-control" placeholder="you@example.com" autocomplete="email">
+    </div>
+    <div class="form-group">
+      <label><strong>Password</strong></label>
+      <input type="password" id="password" class="form-control" placeholder="Min. 6 characters" autocomplete="new-password">
+    </div>
+    <div class="form-group">
+      <label><strong>Confirm Password</strong></label>
+      <input type="password" id="confirm" class="form-control" placeholder="Re-enter password" autocomplete="new-password">
+    </div>
+    <button class="btn btn-primary" style="width:100%" id="signup-btn" onclick="doSignup()"><strong>Create Free Account</strong></button>
+    <div class="alert alert-info" style="margin-top:1rem;font-size:0.8rem;">
+      <strong>🎁 Free plan includes:</strong> 100 starter credits, access to Llama & Gemma models, 10 req/min rate limit
+    </div>
+    <div class="auth-footer">
+      <strong>Already have an account?</strong> <a href="login.html"><strong>Sign in →</strong></a>
+    </div>
+  </div>
+</div>
+<script src="app.js"></script>
+<script>
+if (isLoggedIn()) window.location.href = "dashboard.html";
+
+async function doSignup() {
+  const email = document.getElementById("email").value.trim();
+  const password = document.getElementById("password").value;
+  const confirm = document.getElementById("confirm").value;
+  if (!email || !password || !confirm) { showAlert("Please fill in all fields", "error"); return; }
+  if (password !== confirm) { showAlert("Passwords do not match", "error"); return; }
+  if (password.length < 6) { showAlert("Password must be at least 6 characters", "error"); return; }
+  setLoading("signup-btn", true);
+  try {
+    const data = await apiFetch("/auth/register", { method: "POST", body: JSON.stringify({ email, password }) });
+    if (data) {
+      setAuth(data.access_token, data.user);
+      window.location.href = "dashboard.html";
+    }
+  } catch (e) {
+    showAlert(e.message, "error");
+    setLoading("signup-btn", false);
+  }
+}
+</script>
+</body>
+</html>
