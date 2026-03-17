@@ -1,8 +1,6 @@
 import os
 import time
-from datetime import datetime, date
-from typing import Optional
-
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -21,12 +19,10 @@ router = APIRouter()
 # CONFIG
 # ─────────────────────────────────────────────
 
-UPI_ID = os.getenv("UPI_ID", "modelshield@upi")
-UPI_NAME = os.getenv("UPI_NAME", "ModelShield")
-
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
 
-MIN_REQUIRED_CREDITS = 1  # 🔥 safety buffer
+MIN_REQUIRED_CREDITS = 1
 
 # ─────────────────────────────────────────────
 # RATE LIMIT
@@ -51,15 +47,6 @@ def check_rate_limit(api_key_id: int, rate_limit: int) -> bool:
     return True
 
 
-def get_daily_usage(db: Session, api_key_id: int) -> int:
-    today = date.today()
-    result = db.query(func.sum(UsageLog.tokens)).filter(
-        UsageLog.api_key_id == api_key_id,
-        func.date(UsageLog.timestamp) == today
-    ).scalar()
-    return result or 0
-
-
 # ─────────────────────────────────────────────
 # MODELS
 # ─────────────────────────────────────────────
@@ -69,12 +56,9 @@ def list_models(db: Session = Depends(get_db)):
     models = db.query(Model).filter(Model.status == "active").all()
     return [
         {
-            "id": m.id,
             "name": m.name,
-            "display_name": m.display_name,
             "provider": m.provider,
-            "cost_per_token": m.cost_per_token,
-            "free_access": m.free_access,
+            "cost_per_token": m.cost_per_token
         }
         for m in models
     ]
@@ -94,7 +78,6 @@ def create_api_key(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-
     count = db.query(ApiKey).filter(
         ApiKey.user_id == current_user.id,
         ApiKey.status == "active"
@@ -119,13 +102,35 @@ def create_api_key(
 
 
 # ─────────────────────────────────────────────
+# PROVIDER ROUTER (🔥 NEW)
+# ─────────────────────────────────────────────
+
+async def call_provider(model, payload, api_key_provider):
+    headers = {
+        "Authorization": f"Bearer {api_key_provider}",
+        "Content-Type": "application/json"
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        res = await client.post(model.endpoint, json=payload, headers=headers)
+
+    print("STATUS:", res.status_code)
+    print("TEXT:", res.text)
+
+    if res.status_code != 200:
+        raise HTTPException(res.status_code, res.text)
+
+    return res.json()
+
+
+# ─────────────────────────────────────────────
 # CHAT COMPLETION
 # ─────────────────────────────────────────────
 
 @router.post("/v1/chat/completions")
 async def chat(req: Request, db: Session = Depends(get_db)):
 
-    # 🔐 USER API KEY AUTH
+    # 🔐 AUTH
     auth_header = req.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
         raise HTTPException(401, "Missing API key")
@@ -147,14 +152,10 @@ async def chat(req: Request, db: Session = Depends(get_db)):
     if not check_rate_limit(api_key.id, api_key.rate_limit):
         raise HTTPException(429, "Rate limit exceeded")
 
-    # 🔐 CREDIT PRE-CHECK (FIXED)
-    if user.credits <= 0:
-        raise HTTPException(402, "No credits left")
-
+    # 💰 CREDIT CHECK
     if user.credits < MIN_REQUIRED_CREDITS:
         raise HTTPException(402, "Low credits")
 
-    # 📦 BODY
     body = await req.json()
     model_name = body.get("model")
 
@@ -166,7 +167,7 @@ async def chat(req: Request, db: Session = Depends(get_db)):
     if not model:
         raise HTTPException(404, "Model not found")
 
-    # 🔑 PROVIDER KEY RESOLUTION
+    # 🔑 PROVIDER KEY LOGIC (🔥 FIXED)
     provider_key = db.query(ProviderKey).filter(
         ProviderKey.provider == model.provider,
         ProviderKey.is_active == True
@@ -174,44 +175,35 @@ async def chat(req: Request, db: Session = Depends(get_db)):
 
     if provider_key:
         api_key_provider = provider_key.api_key
-    else:
+    elif model.provider == "groq":
         api_key_provider = GROQ_API_KEY
+    elif model.provider == "nvidia":
+        api_key_provider = NVIDIA_API_KEY
+    else:
+        api_key_provider = None
 
     if not api_key_provider:
         raise HTTPException(500, f"{model.provider} provider not configured")
 
     payload = {
         "model": model.name,
-        "messages": body.get("messages", []),
-    }
-
-    headers = {
-        "Authorization": f"Bearer {api_key_provider}",
-        "Content-Type": "application/json"
+        "messages": body.get("messages", [])
     }
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            res = await client.post(model.endpoint, json=payload, headers=headers)
+        data = await call_provider(model, payload, api_key_provider)
 
-        if res.status_code != 200:
-            raise HTTPException(res.status_code, res.text)
+        # 🔥 SAFE TOKEN PARSE
+        usage = data.get("usage") or {}
+        tokens = usage.get("total_tokens", 0)
 
-        data = res.json()
-
-        # 💰 COST CALCULATION
-        tokens = data.get("usage", {}).get("total_tokens", 0)
         cost = tokens * model.cost_per_token
 
-        # 🔐 FINAL CREDIT CHECK (CRITICAL)
         if user.credits < cost:
-            user.credits = 0
-            db.commit()
             raise HTTPException(402, "Insufficient credits")
 
         user.credits -= cost
 
-        # 📊 LOGGING
         db.add(UsageLog(
             user_id=user.id,
             api_key_id=api_key.id,
@@ -225,6 +217,7 @@ async def chat(req: Request, db: Session = Depends(get_db)):
         return data
 
     except Exception as e:
+        print("ERROR:", str(e))
         raise HTTPException(500, f"Provider error: {str(e)}")
 
 
