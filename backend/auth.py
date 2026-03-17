@@ -2,6 +2,9 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -9,19 +12,25 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt
 from pydantic import BaseModel
 
-# ✅ FIXED IMPORT
 from backend.database import get_db, User
 
 # ─── CONFIG ─────────────────────────────────────────
 
-SECRET_KEY = os.getenv("SECRET_KEY", "change-this-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24 * 7  # 7 days
+
+# 🚨 Hard fail if secret missing
+if not SECRET_KEY:
+    raise Exception("❌ SECRET_KEY not set in environment")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
 router = APIRouter()
+
+# Optional debug toggle
+DEBUG_AUTH = os.getenv("DEBUG_AUTH", "false").lower() == "true"
 
 
 # ─── SCHEMAS ───────────────────────────────────────
@@ -53,16 +62,41 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+    now = datetime.utcnow()
+    expire = now + (expires_delta or timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS))
+
+    to_encode.update({
+        "iat": now,
+        "exp": expire
+    })
+
+    token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+    if DEBUG_AUTH:
+        print("🔐 TOKEN CREATED:", token)
+        print("🔑 SECRET USED:", SECRET_KEY[:10] + "...")
+
+    return token
 
 
-def decode_token(token: str) -> Optional[dict]:
+def decode_token(token: str) -> dict:
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except JWTError:
-        return None
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+
+        if DEBUG_AUTH:
+            print("✅ TOKEN VALID")
+            print("📦 PAYLOAD:", payload)
+
+        return payload
+
+    except JWTError as e:
+        if DEBUG_AUTH:
+            print("❌ JWT ERROR:", str(e))
+            print("🔑 SECRET USED:", SECRET_KEY[:10] + "...")
+            print("🎟 TOKEN:", token[:20] + "...")
+
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
 
 
 # ─── AUTH DEPENDENCIES ─────────────────────────────
@@ -71,11 +105,10 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ) -> User:
+
     token = credentials.credentials
 
     payload = decode_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     user_id = payload.get("sub")
     if not user_id:
