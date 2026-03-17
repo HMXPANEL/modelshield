@@ -1,9 +1,7 @@
 import os
 import time
-from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 from pydantic import BaseModel
 import httpx
 
@@ -65,7 +63,7 @@ def list_models(db: Session = Depends(get_db)):
 
 
 # ─────────────────────────────────────────────
-# API KEYS
+# API KEY CREATION
 # ─────────────────────────────────────────────
 
 class CreateKeyRequest(BaseModel):
@@ -102,7 +100,7 @@ def create_api_key(
 
 
 # ─────────────────────────────────────────────
-# PROVIDER ROUTER (🔥 NEW)
+# PROVIDER CALL (SAFE)
 # ─────────────────────────────────────────────
 
 async def call_provider(model, payload, api_key_provider):
@@ -111,16 +109,30 @@ async def call_provider(model, payload, api_key_provider):
         "Content-Type": "application/json"
     }
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        res = await client.post(model.endpoint, json=payload, headers=headers)
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            res = await client.post(
+                model.endpoint,
+                json=payload,
+                headers=headers
+            )
 
-    print("STATUS:", res.status_code)
-    print("TEXT:", res.text)
+        print("STATUS:", res.status_code)
+        print("RAW:", res.text[:300])
 
-    if res.status_code != 200:
-        raise HTTPException(res.status_code, res.text)
+        # Safe JSON parse
+        try:
+            data = res.json()
+        except Exception:
+            raise HTTPException(500, f"Invalid JSON response: {res.text}")
 
-    return res.json()
+        if res.status_code != 200:
+            raise HTTPException(res.status_code, data)
+
+        return data
+
+    except httpx.RequestError as e:
+        raise HTTPException(500, f"Network error: {str(e)}")
 
 
 # ─────────────────────────────────────────────
@@ -129,6 +141,8 @@ async def call_provider(model, payload, api_key_provider):
 
 @router.post("/v1/chat/completions")
 async def chat(req: Request, db: Session = Depends(get_db)):
+
+    print("CHAT ENDPOINT HIT")
 
     # 🔐 AUTH
     auth_header = req.headers.get("Authorization", "")
@@ -167,7 +181,10 @@ async def chat(req: Request, db: Session = Depends(get_db)):
     if not model:
         raise HTTPException(404, "Model not found")
 
-    # 🔑 PROVIDER KEY LOGIC (🔥 FIXED)
+    print("MODEL:", model.name)
+    print("PROVIDER:", model.provider)
+
+    # 🔑 PROVIDER KEY RESOLUTION
     provider_key = db.query(ProviderKey).filter(
         ProviderKey.provider == model.provider,
         ProviderKey.is_active == True
@@ -182,18 +199,24 @@ async def chat(req: Request, db: Session = Depends(get_db)):
     else:
         api_key_provider = None
 
+    print("PROVIDER KEY FOUND:", bool(api_key_provider))
+
     if not api_key_provider:
         raise HTTPException(500, f"{model.provider} provider not configured")
 
+    # ✅ FIXED PAYLOAD
     payload = {
         "model": model.name,
-        "messages": body.get("messages", [])
+        "messages": body.get("messages", []),
+        "max_tokens": body.get("max_tokens", 512),
+        "temperature": body.get("temperature", 0.7)
     }
+
+    print("CALLING:", model.endpoint)
 
     try:
         data = await call_provider(model, payload, api_key_provider)
 
-        # 🔥 SAFE TOKEN PARSE
         usage = data.get("usage") or {}
         tokens = usage.get("total_tokens", 0)
 
