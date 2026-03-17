@@ -1,23 +1,30 @@
 import os
 from datetime import datetime, timedelta
 from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from pydantic import BaseModel
-from database import get_db, User
 
-# BUG FIX: Use env var for secret — never hard-code in production
-SECRET_KEY = os.getenv("SECRET_KEY", "modelshield-super-secret-key-2024-change-in-production")
+# ✅ FIXED IMPORT
+from backend.database import get_db, User
+
+# ─── CONFIG ─────────────────────────────────────────
+
+SECRET_KEY = os.getenv("SECRET_KEY", "change-this-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24 * 7  # 7 days
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
+
 router = APIRouter()
 
+
+# ─── SCHEMAS ───────────────────────────────────────
 
 class RegisterRequest(BaseModel):
     email: str
@@ -33,6 +40,8 @@ class GoogleLoginRequest(BaseModel):
     google_id: str
     email: str
 
+
+# ─── UTILS ─────────────────────────────────────────
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
@@ -51,26 +60,31 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 def decode_token(token: str) -> Optional[dict]:
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         return None
 
+
+# ─── AUTH DEPENDENCIES ─────────────────────────────
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ) -> User:
     token = credentials.credentials
+
     payload = decode_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token payload")
+
     user = db.query(User).filter(User.id == int(user_id)).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+
     return user
 
 
@@ -80,24 +94,32 @@ def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
+# ─── ROUTES ───────────────────────────────────────
+
 @router.post("/register")
 def register(req: RegisterRequest, db: Session = Depends(get_db)):
+
     if len(req.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
-    # Normalise email to lowercase
+        raise HTTPException(400, "Password must be at least 6 characters")
+
     email = req.email.strip().lower()
+
     existing = db.query(User).filter(User.email == email).first()
     if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        raise HTTPException(400, "Email already registered")
+
     user = User(
         email=email,
         password_hash=hash_password(req.password),
         credits=100.0
     )
+
     db.add(user)
     db.commit()
     db.refresh(user)
+
     token = create_access_token({"sub": str(user.id)})
+
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -112,13 +134,19 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
 
 @router.post("/login")
 def login(req: LoginRequest, db: Session = Depends(get_db)):
+
     email = req.email.strip().lower()
+
     user = db.query(User).filter(User.email == email).first()
+
     if not user or not user.password_hash:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(401, "Invalid email or password")
+
     if not verify_password(req.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(401, "Invalid email or password")
+
     token = create_access_token({"sub": str(user.id)})
+
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -133,10 +161,14 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
 @router.post("/google-login")
 def google_login(req: GoogleLoginRequest, db: Session = Depends(get_db)):
+
     user = db.query(User).filter(User.google_id == req.google_id).first()
+
     if not user:
         email = req.email.strip().lower()
+
         user = db.query(User).filter(User.email == email).first()
+
         if user:
             user.google_id = req.google_id
         else:
@@ -146,9 +178,12 @@ def google_login(req: GoogleLoginRequest, db: Session = Depends(get_db)):
                 credits=100.0
             )
             db.add(user)
+
         db.commit()
         db.refresh(user)
+
     token = create_access_token({"sub": str(user.id)})
+
     return {
         "access_token": token,
         "token_type": "bearer",
