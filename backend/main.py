@@ -25,7 +25,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from database import create_tables, SessionLocal, seed_models, seed_admin
+from backend.database import create_tables, SessionLocal, seed_models, seed_admin
 import auth
 import api
 
