@@ -24,7 +24,9 @@ router = APIRouter()
 UPI_ID = os.getenv("UPI_ID", "modelshield@upi")
 UPI_NAME = os.getenv("UPI_NAME", "ModelShield")
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # ✅ FIX
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+MIN_REQUIRED_CREDITS = 1  # 🔥 safety buffer
 
 # ─────────────────────────────────────────────
 # RATE LIMIT
@@ -145,6 +147,13 @@ async def chat(req: Request, db: Session = Depends(get_db)):
     if not check_rate_limit(api_key.id, api_key.rate_limit):
         raise HTTPException(429, "Rate limit exceeded")
 
+    # 🔐 CREDIT PRE-CHECK (FIXED)
+    if user.credits <= 0:
+        raise HTTPException(402, "No credits left")
+
+    if user.credits < MIN_REQUIRED_CREDITS:
+        raise HTTPException(402, "Low credits")
+
     # 📦 BODY
     body = await req.json()
     model_name = body.get("model")
@@ -157,7 +166,7 @@ async def chat(req: Request, db: Session = Depends(get_db)):
     if not model:
         raise HTTPException(404, "Model not found")
 
-    # 🔑 PROVIDER KEY RESOLUTION (FIXED)
+    # 🔑 PROVIDER KEY RESOLUTION
     provider_key = db.query(ProviderKey).filter(
         ProviderKey.provider == model.provider,
         ProviderKey.is_active == True
@@ -166,13 +175,11 @@ async def chat(req: Request, db: Session = Depends(get_db)):
     if provider_key:
         api_key_provider = provider_key.api_key
     else:
-        # fallback (for Groq)
         api_key_provider = GROQ_API_KEY
 
     if not api_key_provider:
         raise HTTPException(500, f"{model.provider} provider not configured")
 
-    # 📡 PROVIDER CALL
     payload = {
         "model": model.name,
         "messages": body.get("messages", []),
@@ -196,8 +203,15 @@ async def chat(req: Request, db: Session = Depends(get_db)):
         tokens = data.get("usage", {}).get("total_tokens", 0)
         cost = tokens * model.cost_per_token
 
+        # 🔐 FINAL CREDIT CHECK (CRITICAL)
+        if user.credits < cost:
+            user.credits = 0
+            db.commit()
+            raise HTTPException(402, "Insufficient credits")
+
         user.credits -= cost
 
+        # 📊 LOGGING
         db.add(UsageLog(
             user_id=user.id,
             api_key_id=api_key.id,
