@@ -101,7 +101,7 @@ class ApiKey(Base):
 
 
 # ─────────────────────────────────────────────
-# MODEL (FIXED)
+# MODEL (OPENROUTER STYLE)
 # ─────────────────────────────────────────────
 
 class Model(Base):
@@ -109,25 +109,25 @@ class Model(Base):
 
     id = Column(Integer, primary_key=True)
 
-    # ❗ REMOVED unique=True (IMPORTANT FIX)
-    name = Column(String, index=True)
+    # 🔥 USER REQUEST MODEL
+    logical_name = Column(String, index=True)
 
-    display_name = Column(String)
+    # 🔥 PROVIDER MODEL
+    provider_model = Column(String)
+
     provider = Column(String, index=True)
-
     endpoint = Column(String)
 
-    cost_per_token = Column(Float, default=0.0001)
-    free_access = Column(Boolean, default=True)
+    priority = Column(Integer, default=1)  # fallback order
 
+    cost_per_token = Column(Float, default=0.0001)
     status = Column(String, default="active")
 
     description = Column(Text)
-    context_length = Column(Integer, default=4096)
 
 
 # ─────────────────────────────────────────────
-# PROVIDER KEY (UPGRADED)
+# PROVIDER KEYS
 # ─────────────────────────────────────────────
 
 class ProviderKey(Base):
@@ -227,22 +227,19 @@ def generate_api_key() -> str:
 
 
 # ─────────────────────────────────────────────
-# PROVIDER KEY ROTATION (NEW)
+# PROVIDER KEY ROTATION (SMART)
 # ─────────────────────────────────────────────
 
 def get_provider_key(db, provider: str):
     keys = db.query(ProviderKey).filter(
         ProviderKey.provider == provider,
         ProviderKey.is_active == True
-    ).all()
+    ).order_by(ProviderKey.usage_count.asc()).all()
 
     if not keys:
         return None
 
-    # simple round-robin / random
-    import random
-    key = random.choice(keys)
-
+    key = keys[0]
     key.usage_count += 1
     db.commit()
 
@@ -250,7 +247,18 @@ def get_provider_key(db, provider: str):
 
 
 # ─────────────────────────────────────────────
-# SEED MODELS (UPDATED)
+# MODEL ROUTER (CORE)
+# ─────────────────────────────────────────────
+
+def get_models_for_logical(db, logical_name: str):
+    return db.query(Model).filter(
+        Model.logical_name == logical_name,
+        Model.status == "active"
+    ).order_by(Model.priority.asc()).all()
+
+
+# ─────────────────────────────────────────────
+# SEED MODELS (MULTI PROVIDER)
 # ─────────────────────────────────────────────
 
 def seed_models(db):
@@ -258,21 +266,35 @@ def seed_models(db):
         return
 
     models = [
-        # GROQ
-        Model(name="llama-3.1-8b-instant", provider="groq",
-              endpoint="https://api.groq.com/openai/v1/chat/completions"),
 
-        # OPENAI
-        Model(name="gpt-4o-mini", provider="openai",
-              endpoint="https://api.openai.com/v1/chat/completions"),
+        # 🔥 LOGICAL MODEL: llama-3.1
 
-        # NVIDIA
-        Model(name="meta/llama-3.1-8b-instruct", provider="nvidia",
-              endpoint="https://integrate.api.nvidia.com/v1/chat/completions"),
+        # FAST → GROQ
+        Model(
+            logical_name="llama-3.1",
+            provider="groq",
+            provider_model="llama-3.1-8b-instant",
+            endpoint="https://api.groq.com/openai/v1/chat/completions",
+            priority=1
+        ),
 
-        # SAME MODEL MULTIPLE PROVIDERS (IMPORTANT)
-        Model(name="meta/llama-3.1-8b-instruct", provider="groq",
-              endpoint="https://api.groq.com/openai/v1/chat/completions"),
+        # POWER → NVIDIA
+        Model(
+            logical_name="llama-3.1",
+            provider="nvidia",
+            provider_model="meta/llama-4-maverick-17b-128e-instruct",
+            endpoint="https://integrate.api.nvidia.com/v1/chat/completions",
+            priority=2
+        ),
+
+        # FALLBACK → OPENAI
+        Model(
+            logical_name="llama-3.1",
+            provider="openai",
+            provider_model="gpt-4o-mini",
+            endpoint="https://api.openai.com/v1/chat/completions",
+            priority=3
+        ),
     ]
 
     for m in models:
