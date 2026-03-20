@@ -1,16 +1,19 @@
+import time
+import os
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 import httpx
-import time
 
 from backend.database import (
     get_db, ApiKey, User, UsageLog,
     hash_api_key, get_provider_key, get_models_for_logical
 )
+from backend.auth import get_current_user, get_admin_user
 
 router = APIRouter()
 
 MIN_REQUIRED_CREDITS = 1
+
 
 # ─────────────────────────────────────────────
 # RATE LIMIT
@@ -36,7 +39,7 @@ def check_rate_limit(api_key_id: int, rate_limit: int) -> bool:
 
 
 # ─────────────────────────────────────────────
-# PROVIDER CALL
+# PROVIDER CALL (ROBUST)
 # ─────────────────────────────────────────────
 
 async def call_provider(model, payload, api_key):
@@ -46,21 +49,30 @@ async def call_provider(model, payload, api_key):
         "Accept": "application/json"
     }
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        res = await client.post(model.endpoint, json=payload, headers=headers)
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            res = await client.post(model.endpoint, json=payload, headers=headers)
 
-    print("PROVIDER:", model.provider)
-    print("STATUS:", res.status_code)
-    print("RAW:", res.text)
+        print("PROVIDER:", model.provider)
+        print("STATUS:", res.status_code)
+        print("RAW:", res.text[:300])
 
-    if res.status_code != 200:
-        raise Exception(res.text)
+        try:
+            data = res.json()
+        except Exception:
+            raise Exception(f"Invalid JSON: {res.text}")
 
-    return res.json()
+        if res.status_code != 200:
+            raise Exception(data)
+
+        return data
+
+    except Exception as e:
+        raise Exception(f"{model.provider} error: {str(e)}")
 
 
 # ─────────────────────────────────────────────
-# MAIN CHAT ENDPOINT (OPENROUTER CORE)
+# MAIN CHAT (OPENROUTER CORE)
 # ─────────────────────────────────────────────
 
 @router.post("/v1/chat/completions")
@@ -97,35 +109,41 @@ async def chat(req: Request, db: Session = Depends(get_db)):
     logical_model = body.get("model")
 
     if not logical_model:
-        raise HTTPException(400, "Model required")
+        raise HTTPException(400, "Model is required")
 
+    # 🔥 GET ROUTED MODELS
     models = get_models_for_logical(db, logical_model)
 
     if not models:
         raise HTTPException(404, "Model not found")
 
-    # 🔥 FALLBACK LOOP
+    last_error = None
+
+    # 🔥 FALLBACK LOOP (OPENROUTER CORE)
     for m in models:
         try:
             provider_key = get_provider_key(db, m.provider)
 
             if not provider_key:
+                print(f"No key for provider: {m.provider}")
                 continue
 
             payload = {
-                "model": m.provider_model,
+                "model": m.provider_model or m.name,  # backward support
                 "messages": body.get("messages", []),
                 "max_tokens": body.get("max_tokens", 512),
                 "temperature": body.get("temperature", 0.7),
                 "top_p": body.get("top_p", 1.0)
             }
 
+            print(f"TRYING → {m.provider} | {payload['model']}")
+
             data = await call_provider(m, payload, provider_key)
 
-            # 💰 COST
+            # 💰 COST CALC
             usage = data.get("usage") or {}
             tokens = usage.get("total_tokens", 0)
-            cost = tokens * m.cost_per_token
+            cost = tokens * (m.cost_per_token or 0.0001)
 
             if user.credits < cost:
                 raise HTTPException(402, "Insufficient credits")
@@ -137,7 +155,8 @@ async def chat(req: Request, db: Session = Depends(get_db)):
                 api_key_id=api_key.id,
                 model=logical_model,
                 tokens=tokens,
-                cost=cost
+                cost=cost,
+                status="success"
             ))
 
             db.commit()
@@ -146,6 +165,75 @@ async def chat(req: Request, db: Session = Depends(get_db)):
 
         except Exception as e:
             print("FAILED:", m.provider, str(e))
+            last_error = str(e)
             continue
 
-    raise HTTPException(500, "All providers failed")
+    # ❌ ALL PROVIDERS FAILED
+    raise HTTPException(500, f"All providers failed: {last_error}")
+
+
+# ─────────────────────────────────────────────
+# API KEY MANAGEMENT
+# ─────────────────────────────────────────────
+
+@router.post("/keys/create")
+def create_key(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from backend.database import generate_api_key
+
+    raw_key = generate_api_key()
+    key_hash = hash_api_key(raw_key)
+
+    api_key = ApiKey(
+        user_id=current_user.id,
+        key_prefix=raw_key[:12],
+        api_key_hash=key_hash
+    )
+
+    db.add(api_key)
+    db.commit()
+
+    return {"api_key": raw_key}
+
+
+@router.get("/keys")
+def list_keys(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    keys = db.query(ApiKey).filter(ApiKey.user_id == current_user.id).all()
+
+    return [
+        {
+            "id": k.id,
+            "prefix": k.key_prefix,
+            "status": k.status,
+            "created_at": k.created_at
+        }
+        for k in keys
+    ]
+
+
+# ─────────────────────────────────────────────
+# ADMIN
+# ─────────────────────────────────────────────
+
+@router.get("/admin/users")
+def users(admin: User = Depends(get_admin_user), db: Session = Depends(get_db)):
+    return db.query(User).all()
+
+
+@router.get("/admin/provider-keys")
+def provider_keys(admin: User = Depends(get_admin_user), db: Session = Depends(get_db)):
+    from backend.database import ProviderKey
+
+    keys = db.query(ProviderKey).all()
+
+    return [
+        {
+            "id": k.id,
+            "provider": k.provider,
+            "usage": k.usage_count,
+            "active": k.is_active
+        }
+        for k in keys
+    ]
