@@ -29,7 +29,6 @@ def _get_engine():
             pool_size=5,
             max_overflow=10
         )
-
     return _engine
 
 
@@ -60,7 +59,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True)
-    email = Column(String, unique=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
     password_hash = Column(String)
     google_id = Column(String, unique=True)
 
@@ -82,10 +81,10 @@ class ApiKey(Base):
     __tablename__ = "api_keys"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
-    key_prefix = Column(String)
-    api_key_hash = Column(String, unique=True)
+    key_prefix = Column(String, nullable=False)
+    api_key_hash = Column(String, unique=True, nullable=False)
 
     name = Column(String, default="My API Key")
     plan = Column(String, default="free")
@@ -101,7 +100,7 @@ class ApiKey(Base):
 
 
 # ─────────────────────────────────────────────
-# MODEL (OPENROUTER STYLE)
+# MODEL (OPENROUTER + BACKWARD SAFE)
 # ─────────────────────────────────────────────
 
 class Model(Base):
@@ -109,20 +108,31 @@ class Model(Base):
 
     id = Column(Integer, primary_key=True)
 
-    # 🔥 USER REQUEST MODEL
+    # 🔥 NEW: logical model (user-facing)
     logical_name = Column(String, index=True)
 
-    # 🔥 PROVIDER MODEL
+    # 🔥 NEW: actual provider model
     provider_model = Column(String)
+
+    # 🔥 EXISTING compatibility
+    name = Column(String, index=True)  # fallback support (old system)
 
     provider = Column(String, index=True)
     endpoint = Column(String)
 
-    priority = Column(Integer, default=1)  # fallback order
+    # routing
+    priority = Column(Integer, default=1)
 
+    # pricing + limits
     cost_per_token = Column(Float, default=0.0001)
-    status = Column(String, default="active")
+    context_length = Column(Integer, default=4096)
 
+    # health system (NEW)
+    is_active = Column(Boolean, default=True)
+    fail_count = Column(Integer, default=0)
+    last_checked = Column(DateTime)
+
+    # metadata
     description = Column(Text)
 
 
@@ -136,7 +146,7 @@ class ProviderKey(Base):
     id = Column(Integer, primary_key=True)
 
     provider = Column(String, index=True)
-    api_key = Column(String)
+    api_key = Column(String, nullable=False)
 
     usage_count = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
@@ -227,7 +237,7 @@ def generate_api_key() -> str:
 
 
 # ─────────────────────────────────────────────
-# PROVIDER KEY ROTATION (SMART)
+# PROVIDER KEY ROTATION (SMART + BALANCED)
 # ─────────────────────────────────────────────
 
 def get_provider_key(db, provider: str):
@@ -247,14 +257,23 @@ def get_provider_key(db, provider: str):
 
 
 # ─────────────────────────────────────────────
-# MODEL ROUTER (CORE)
+# MODEL ROUTER (SMART + FALLBACK)
 # ─────────────────────────────────────────────
 
 def get_models_for_logical(db, logical_name: str):
-    return db.query(Model).filter(
+    # NEW SYSTEM
+    models = db.query(Model).filter(
         Model.logical_name == logical_name,
-        Model.status == "active"
+        Model.is_active == True
     ).order_by(Model.priority.asc()).all()
+
+    # BACKWARD COMPATIBILITY
+    if not models:
+        models = db.query(Model).filter(
+            Model.name == logical_name
+        ).all()
+
+    return models
 
 
 # ─────────────────────────────────────────────
@@ -267,31 +286,31 @@ def seed_models(db):
 
     models = [
 
-        # 🔥 LOGICAL MODEL: llama-3.1
+        # 🔥 LOGICAL: llama-3.1
 
-        # FAST → GROQ
         Model(
             logical_name="llama-3.1",
             provider="groq",
             provider_model="llama-3.1-8b-instant",
+            name="llama-3.1-8b-instant",
             endpoint="https://api.groq.com/openai/v1/chat/completions",
             priority=1
         ),
 
-        # POWER → NVIDIA
         Model(
             logical_name="llama-3.1",
             provider="nvidia",
             provider_model="meta/llama-4-maverick-17b-128e-instruct",
+            name="meta/llama-4-maverick-17b-128e-instruct",
             endpoint="https://integrate.api.nvidia.com/v1/chat/completions",
             priority=2
         ),
 
-        # FALLBACK → OPENAI
         Model(
             logical_name="llama-3.1",
             provider="openai",
             provider_model="gpt-4o-mini",
+            name="gpt-4o-mini",
             endpoint="https://api.openai.com/v1/chat/completions",
             priority=3
         ),
